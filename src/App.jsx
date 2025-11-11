@@ -2,22 +2,7 @@ import { useMemo, useState } from 'react'
 import firms from './data/nyc_firms.json'
 import './App.css'
 
-const firmLogoModules = import.meta.glob(
-  [
-    './assets/logos/*.{png,jpg,jpeg,svg,webp}',
-    '../Firms_Logo/*.{png,jpg,jpeg,svg,webp}',
-  ],
-  {
-    eager: true,
-    import: 'default',
-  },
-)
-
-const normalizeSlug = (value = '') =>
-  value
-    .toLowerCase()
-    .replace(/\.(png|jpe?g|svg|webp|gif)$/, '')
-    .replace(/[^a-z0-9]/g, '')
+const base = import.meta.env.BASE_URL.replace(/\/$/, '')
 
 const hexToRgb = (hex = '') => {
   const sanitized = hex.trim().replace(/^#/, '')
@@ -126,88 +111,11 @@ const lightenHex = (hex, delta = 0.08) => {
   return rgbToHex(r, g, b)
 }
 
-const logoLibrary = Object.entries(firmLogoModules).map(([path, mod]) => {
-  const fileName = path.split('/').pop() || ''
-  return {
-    src: mod,
-    fileName: fileName.toLowerCase(),
-    slug: normalizeSlug(fileName),
-  }
-})
-
-const logosByFile = logoLibrary.reduce((acc, entry) => {
-  acc[entry.fileName] = entry.src
-  return acc
-}, {})
-
-const logosBySlug = logoLibrary.reduce((acc, entry) => {
-  if (!acc[entry.slug]) {
-    acc[entry.slug] = entry.src
-  }
-  return acc
-}, {})
-
-const levenshteinDistance = (a = '', b = '') => {
-  if (a === b) return 0
-  if (!a) return b.length
-  if (!b) return a.length
-
-  let previousRow = Array.from({ length: b.length + 1 }, (_, index) => index)
-
-  for (let i = 1; i <= a.length; i += 1) {
-    const currentRow = [i]
-    for (let j = 1; j <= b.length; j += 1) {
-      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1
-      currentRow[j] = Math.min(
-        currentRow[j - 1] + 1, // insertion
-        previousRow[j] + 1, // deletion
-        previousRow[j - 1] + substitutionCost, // substitution
-      )
-    }
-    previousRow = currentRow
-  }
-
-  return previousRow[b.length]
-}
-
-const resolveLogo = (logoPath, firmName) => {
-  const fileName = logoPath?.split('/').pop()?.toLowerCase()
-  if (fileName && logosByFile[fileName]) {
-    return logosByFile[fileName]
-  }
-
-  const targetSlug =
-    normalizeSlug(fileName) ||
-    normalizeSlug(firmName) ||
-    ''
-
-  if (!targetSlug) return ''
-
-  if (logosBySlug[targetSlug]) {
-    return logosBySlug[targetSlug]
-  }
-
-  const partial = logoLibrary.find(
-    (entry) => entry.slug.includes(targetSlug) || targetSlug.includes(entry.slug),
-  )
-  if (partial) {
-    return partial.src
-  }
-
-  let bestMatch = { src: '', distance: Infinity }
-  logoLibrary.forEach((entry) => {
-    const distance = levenshteinDistance(targetSlug, entry.slug)
-    if (distance < bestMatch.distance) {
-      bestMatch = { src: entry.src, distance }
-    }
-  })
-
-  const threshold = Math.max(2, Math.ceil(targetSlug.length * 0.35))
-  if (bestMatch.src && bestMatch.distance <= threshold) {
-    return bestMatch.src
-  }
-
-  return ''
+const buildImageUrl = (path = '') => {
+  if (!path) return ''
+  if (/^https?:\/\//i.test(path)) return path
+  const normalized = path.startsWith('/') ? path : `/${path}`
+  return `${base}${normalized}`
 }
 
 const trimWords = (text = '', limit = 32) => {
@@ -235,7 +143,7 @@ const buildInitialCards = (source) =>
     category: firm.category,
     address: firm.hq_address,
     website: firm.website,
-    logo: resolveLogo(firm.logo_url, firm.firm_name),
+    logo: buildImageUrl(firm.logo_url),
     colors: {
       base: firm.bg_color || '#0e141f',
       accent: firm.accent_color || '#a5b9ff',
