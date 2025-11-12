@@ -3,6 +3,40 @@ import firms from './data/nyc_firms.json'
 import './App.css'
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+const MAX_TIER_CARDS = 2
+
+const STAGE_TIERS = [
+  {
+    id: 'funding-scout',
+    group: 'Funding Phase',
+    title: 'Pre-Raise Radar',
+    description: 'Teams still chasing traction or readying a seed round.',
+  },
+  {
+    id: 'funding-active',
+    group: 'Funding Phase',
+    title: 'In-Market Heat',
+    description: 'Term sheets active and velocity-first stories.',
+  },
+  {
+    id: 'ipo-prepare',
+    group: 'IPO Phase',
+    title: 'IPO Sprint',
+    description: 'Polishing the S-1 and governance ahead of the window.',
+  },
+  {
+    id: 'ipo-window',
+    group: 'IPO Phase',
+    title: 'IPO Window',
+    description: 'Within days of pricing or ringing the bell.',
+  },
+  {
+    id: 'post-ipo',
+    group: 'Post-IPO',
+    title: 'Post-Market Expansion',
+    description: 'Fortifying the moat and planning global scale.',
+  },
+]
 
 const hexToRgb = (hex = '') => {
   const sanitized = hex.trim().replace(/^#/, '')
@@ -121,19 +155,25 @@ const buildImageUrl = (path = '') => {
 const trimWords = (text = '', limit = 32) => {
   const words = text.split(/\s+/).filter(Boolean)
   if (words.length <= limit) return text.trim()
-  return `${words.slice(0, limit).join(' ')}…`
+  return `${words.slice(0, limit).join(' ')}...`
+}
+
+const buildVoiceLine = (firm) => {
+  const shortName = firm.firm_name?.split('(')[0]?.trim() || firm.firm_name
+  const stage = firm.focus_stage || firm.round_stage || 'Multi-round'
+  const check = firm.typical_check_size || firm.required_capital_usd || 'Flexible tickets'
+  const city = firm.city || 'NYC'
+  const sector = firm.sector_focus || 'Multi-sector'
+  return `${shortName} backs ${stage} founders in ${city} with ${check}, favoring ${sector} instincts.`
 }
 
 const buildSummary = (firm) => {
-  const cityLine = firm.city ? `${firm.city}, ${firm.state || 'NY'}` : 'New York'
-  const stage = firm.focus_stage || firm.round_stage || 'growth rounds'
-  const checks = firm.typical_check_size || firm.required_capital_usd || 'flexible commitments'
+  const descriptor = firm.description || ''
   const notes = firm.notes || ''
-  const quote = firm.quote_style_line || ''
-
-  const narrative = `${firm.firm_name} anchors ${stage} founders from ${cityLine}, pairing ${checks} capital with ${firm.sector_focus || 'multi-sector'} instincts. ${notes} ${quote}`
-
-  return trimWords(narrative, 32)
+  const baseLine = `${firm.firm_name} - ${firm.focus_stage || 'Multi-stage'} - ${
+    firm.sector_focus || 'Multi-sector'
+  } - ${firm.typical_check_size || firm.required_capital_usd || 'Flexible tickets'}`
+  return trimWords([baseLine, descriptor, notes].filter(Boolean).join(' '), 42)
 }
 
 const buildInitialCards = (source) =>
@@ -150,7 +190,7 @@ const buildInitialCards = (source) =>
     },
     focusStage: firm.focus_stage || firm.round_stage,
     investmentRange: firm.required_capital_usd,
-    quote: firm.quote_style_line,
+    quote: buildVoiceLine(firm),
     notes: firm.notes,
     summary: buildSummary(firm),
     placeholder: createPlaceholderImage(firm),
@@ -196,29 +236,23 @@ const createPlaceholderImage = (firm) => {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
 }
 
-const reorderCards = (cards, draggedId, targetId) => {
-  const updated = [...cards]
-  const fromIndex = updated.findIndex((item) => item.id === draggedId)
-  const toIndex = updated.findIndex((item) => item.id === targetId)
-
-  if (fromIndex === -1 || toIndex === -1) return cards
-  const [moved] = updated.splice(fromIndex, 1)
-  updated.splice(toIndex, 0, moved)
-  return updated
-}
-
-const moveCardToEnd = (cards, draggedId) => {
-  const updated = [...cards]
-  const fromIndex = updated.findIndex((item) => item.id === draggedId)
-  if (fromIndex === -1) return cards
-  const [moved] = updated.splice(fromIndex, 1)
-  updated.push(moved)
-  return updated
-}
-
 function App() {
-  const [companyCards, setCompanyCards] = useState(() => buildInitialCards(firms))
-  const [draggedId, setDraggedId] = useState(null)
+  const companyCards = useMemo(() => buildInitialCards(firms), [])
+  const cardsById = useMemo(() => {
+    const map = new Map()
+    companyCards.forEach((card) => {
+      map.set(card.id, card)
+    })
+    return map
+  }, [companyCards])
+
+  const [tierAssignments, setTierAssignments] = useState(() =>
+    STAGE_TIERS.reduce((acc, tier) => {
+      acc[tier.id] = []
+      return acc
+    }, {}),
+  )
+  const [dragMeta, setDragMeta] = useState({ id: null, source: null })
   const [dropTargetId, setDropTargetId] = useState(null)
   const [selectedCardId, setSelectedCardId] = useState(null)
   const [activeCategory, setActiveCategory] = useState('All Firms')
@@ -244,24 +278,17 @@ function App() {
     return companyCards.filter((card) => matchCategory(card) && matchStage(card))
   }, [companyCards, activeCategory, activeStage])
 
-  const handleDragStart = (id) => (event) => {
-    setDraggedId(id)
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('text/plain', id)
-  }
-
-  const handleDragEnter = (id) => (event) => {
-    event.preventDefault()
-    if (id === draggedId) return
-    setDropTargetId(id)
-  }
-
-  const handleDragOver = (event) => {
-    event.preventDefault()
-  }
+  const assignedIds = useMemo(
+    () => new Set(Object.values(tierAssignments).flat()),
+    [tierAssignments],
+  )
+  const availableCards = useMemo(
+    () => filteredCards.filter((card) => !assignedIds.has(card.id)),
+    [filteredCards, assignedIds],
+  )
 
   const handleCardClick = (id) => () => {
-    if (draggedId) return
+    if (dragMeta.id) return
     setSelectedCardId((current) => (current === id ? null : id))
   }
 
@@ -272,52 +299,186 @@ function App() {
     }
   }
 
-  const handleDrop = (id) => (event) => {
-    event.preventDefault()
-    if (!draggedId || draggedId === id) {
-      setDropTargetId(null)
-      return
-    }
-
-    setCompanyCards((prev) => reorderCards(prev, draggedId, id))
-    setDraggedId(null)
+  const handleCardDragStart = (cardId, source) => (event) => {
+    setDragMeta({ id: cardId, source })
     setDropTargetId(null)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', cardId)
   }
 
   const handleDragEnd = () => {
-    setDraggedId(null)
+    setDragMeta({ id: null, source: null })
     setDropTargetId(null)
   }
 
-  const handleBoardDrop = (event) => {
+  const moveCardToTier = (cardId, tierId = null) => {
+    setTierAssignments((prev) => {
+      const stripped = Object.fromEntries(
+        Object.entries(prev).map(([key, list]) => [key, list.filter((id) => id !== cardId)]),
+      )
+      if (!tierId) {
+        return stripped
+      }
+      const target = stripped[tierId] || []
+      if (target.length >= MAX_TIER_CARDS) {
+        return prev
+      }
+      return {
+        ...stripped,
+        [tierId]: [...target, cardId],
+      }
+    })
+  }
+
+  const handleTierDrop = (tierId) => (event) => {
     event.preventDefault()
-    if (!draggedId) return
-    setCompanyCards((prev) => moveCardToEnd(prev, draggedId))
-    setDraggedId(null)
-    setDropTargetId(null)
+    if (!dragMeta.id) return
+    moveCardToTier(dragMeta.id, tierId)
+    handleDragEnd()
   }
 
-  const boardDropClasses = dropTargetId === 'board-end' ? 'drop-zone active' : 'drop-zone'
+  const handleTierDragEnter = (tierId) => (event) => {
+    event.preventDefault()
+    if (!dragMeta.id) return
+    setDropTargetId(tierId)
+  }
+
+  const handlePoolDragEnter = (event) => {
+    event.preventDefault()
+    if (!dragMeta.id) return
+    setDropTargetId('library')
+  }
+
+  const handlePoolDrop = (event) => {
+    event.preventDefault()
+    if (!dragMeta.id) return
+    moveCardToTier(dragMeta.id)
+    handleDragEnd()
+  }
+
+  const releaseCard = (cardId) => {
+    moveCardToTier(cardId)
+  }
+
+  const renderCard = (card, { variant = 'library-card', originTierId = null } = {}) => {
+    const gradientBase = lightenHex(
+      mixWithNeutral(desaturateHex(card.colors.base || '#0e141f'), '#050810', 0.38),
+      0.4,
+    )
+    const gradientAccent = lightenHex(
+      mixWithNeutral(desaturateHex(card.colors.accent || '#a5b9ff'), '#0f1824', 0.24),
+      0.3,
+    )
+    const auraAccent = lightenHex(
+      mixWithNeutral(desaturateHex(card.colors.accent || '#a5b9ff'), '#08101f', 0.3),
+      0.24,
+    )
+    const cardClassNames = ['tarot-card', variant]
+
+    if (dragMeta.id === card.id) cardClassNames.push('dragging')
+    if (selectedCardId === card.id) cardClassNames.push('selected')
+
+    const websiteLabel = card.website ? card.website.replace(/^https?:\/\//, '') : 'No link'
+
+    return (
+      <article
+        key={`${variant}-${card.id}`}
+        className={cardClassNames.join(' ')}
+        draggable
+        tabIndex={0}
+        role="button"
+        aria-pressed={selectedCardId === card.id}
+        onDragStart={handleCardDragStart(card.id, originTierId ? `tier:${originTierId}` : 'library')}
+        onDragEnd={handleDragEnd}
+        onClick={handleCardClick(card.id)}
+        onKeyDown={handleCardKey(card.id)}
+      >
+        {originTierId ? (
+          <button
+            type="button"
+            className="card-remove"
+            onClick={(event) => {
+              event.stopPropagation()
+              releaseCard(card.id)
+            }}
+          >
+            Return
+          </button>
+        ) : null}
+        <div
+          className="card-aura"
+          style={{
+            background: `radial-gradient(circle at top, ${auraAccent}24, transparent 70%)`,
+          }}
+        />
+        <div className="card-content">
+          <img
+            src={card.logo || card.placeholder}
+            alt={`${card.name} logo`}
+            className="card-logo"
+            onError={(event) => {
+              if (event.currentTarget.src !== card.placeholder) {
+                event.currentTarget.src = card.placeholder
+              }
+            }}
+            style={{
+              background: `linear-gradient(135deg, ${gradientBase}, ${gradientAccent})`,
+            }}
+          />
+          <div className="card-text">
+            <h2>{card.name}</h2>
+            <p className="tag">{card.category}</p>
+            <p className="address">{card.address}</p>
+            {card.website ? (
+              <a className="website" href={card.website} target="_blank" rel="noreferrer">
+                {websiteLabel}
+              </a>
+            ) : (
+              <span className="website muted">{websiteLabel}</span>
+            )}
+            <p className="inline-summary">{card.summary}</p>
+          </div>
+          <div className={`card-detail ${selectedCardId === card.id ? 'visible' : ''}`}>
+            <p className="quote">{card.quote}</p>
+            <p className="summary">{card.notes || card.summary}</p>
+            <div className="detail-grid">
+              <div>
+                <span className="label">Stage</span>
+                <span>{card.focusStage || '-'}</span>
+              </div>
+              <div>
+                <span className="label">Check</span>
+                <span>{card.investmentRange || '-'}</span>
+              </div>
+              <div className="notes">
+                <span className="label">Notes</span>
+                <p>{card.notes || 'Founder-friendly partner focused on momentum.'}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+    )
+  }
 
   return (
     <div className="app-shell">
       <section className="guide">
         <div className="guide-left">
           <p className="eyebrow">NYC Firm Navigator</p>
-          <h1>Liquid Tarot Board</h1>
+          <h1>Tiered Deal Board</h1>
           <p className="subhead">
-            Drag cards, tap filters, and crack open each firm’s 30-word signal before your next pitch
-            walk.
+            Drag firms across Funding to IPO to Post-IPO tracks, two cards max per lane for quick comparisons.
           </p>
           <ol className="guide-steps">
             <li>
-              <strong>Filter pulse.</strong> Focus by capital type or round heat.
+              <strong>Set the signal.</strong> Use the filters to lock capital type and round.
             </li>
             <li>
-              <strong>Drag to rank.</strong> Move cards into your hunt order.
+              <strong>Drag into stages.</strong> Keep two cards per lane to shape your tier list.
             </li>
             <li>
-              <strong>Tap to reveal.</strong> Each tile expands with a distilled thesis.
+              <strong>Open the profile.</strong> Click a card to read the voice line and capital focus.
             </li>
           </ol>
         </div>
@@ -352,116 +513,83 @@ function App() {
           </div>
         </div>
       </section>
-      <div className="board" onDragOver={handleDragOver} onDrop={handleBoardDrop}>
-        {filteredCards.map((card) => {
-          const isDragging = draggedId === card.id
-          const isDropTarget = dropTargetId === card.id
-          const isSelected = selectedCardId === card.id
-          const gradientBase = lightenHex(
-            mixWithNeutral(
-              desaturateHex(card.colors.base || '#0e141f'),
-              '#050810',
-              0.38,
-            ),
-            0.4,
-          )
-          const gradientAccent = lightenHex(
-            mixWithNeutral(
-              desaturateHex(card.colors.accent || '#a5b9ff'),
-              '#0f1824',
-              0.24,
-            ),
-            0.3,
-          )
-          const auraAccent = lightenHex(
-            mixWithNeutral(
-              desaturateHex(card.colors.accent || '#a5b9ff'),
-              '#08101f',
-              0.3,
-            ),
-            0.24,
-          )
-          const cardClassNames = ['tarot-card']
 
-          if (isDragging) cardClassNames.push('dragging')
-          if (isDropTarget) cardClassNames.push('drop-target')
-          if (isSelected) cardClassNames.push('selected')
+      <section className="tiers-board">
+        <div className="tiers-headline">
+          <p className="eyebrow">Tier Builder</p>
+          <h2>Funding to IPO to Post-IPO Track</h2>
+          <p>Drop up to two cards into each phase and reshuffle live during class.</p>
+        </div>
+        {STAGE_TIERS.map((tier) => {
+          const currentCards = tierAssignments[tier.id]
+            .map((cardId) => cardsById.get(cardId))
+            .filter(Boolean)
+          const emptySlots = Math.max(0, MAX_TIER_CARDS - currentCards.length)
 
           return (
-            <article
-              key={card.id}
-              className={cardClassNames.join(' ')}
-              draggable
-              tabIndex={0}
-              role="button"
-              aria-pressed={isSelected}
-              onDragStart={handleDragStart(card.id)}
-              onDragEnter={handleDragEnter(card.id)}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop(card.id)}
-              onDragEnd={handleDragEnd}
-              onClick={handleCardClick(card.id)}
-              onKeyDown={handleCardKey(card.id)}
-            >
-              <div
-                className="card-aura"
-                style={{
-                  background: `radial-gradient(circle at top, ${auraAccent}24, transparent 70%)`,
-                }}
-              />
-              <div className="card-content">
-                <img
-                  src={card.logo || card.placeholder}
-                  alt={`${card.name} logo`}
-                  className="card-logo"
-                  onError={(event) => {
-                    if (event.currentTarget.src !== card.placeholder) {
-                      event.currentTarget.src = card.placeholder
-                    }
-                  }}
-                  style={{
-                    background: `linear-gradient(135deg, ${gradientBase}, ${gradientAccent})`,
-                  }}
-                />
-                <div className="card-text">
-                  <h2>{card.name}</h2>
-                  <p className="tag">{card.category}</p>
-                  <p className="address">{card.address}</p>
-                  <a className="website" href={card.website} target="_blank" rel="noreferrer">
-                    {card.website.replace(/^https?:\/\//, '')}
-                  </a>
-                </div>
-                <div className={`card-detail ${isSelected ? 'visible' : ''}`}>
-                  <p className="quote">{card.quote || 'Stay curious, trust the signal.'}</p>
-                  <p className="summary">{card.summary}</p>
-                  <div className="detail-grid">
-                    <div>
-                      <span className="label">Stage</span>
-                      <span>{card.focusStage || '—'}</span>
-                    </div>
-                    <div>
-                      <span className="label">Check</span>
-                      <span>{card.investmentRange || '—'}</span>
-                    </div>
-                    <div className="notes">
-                      <span className="label">Notes</span>
-                      <p>{card.notes || 'Founder-friendly partner focused on momentum.'}</p>
-                    </div>
-                  </div>
-                </div>
+            <div key={tier.id} className="tier-row">
+              <div className="tier-meta">
+                <p className="tier-eyebrow">{tier.group}</p>
+                <h3>{tier.title}</h3>
+                <p>{tier.description}</p>
+                <span className="tier-cap">Max {MAX_TIER_CARDS}</span>
               </div>
-            </article>
+              <div
+                className={`tier-track ${dropTargetId === tier.id ? 'active' : ''} ${
+                  currentCards.length >= MAX_TIER_CARDS ? 'full' : ''
+                }`}
+                onDragEnter={handleTierDragEnter(tier.id)}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={handleTierDrop(tier.id)}
+              >
+                {currentCards.map((card) => renderCard(card, { variant: 'tier-card', originTierId: tier.id }))}
+                {Array.from({ length: emptySlots }).map((_, index) => (
+                  <div key={`slot-${tier.id}-${index}`} className="tier-slot">
+                    <span>Drop cards here</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           )
         })}
-        <div
-          className={boardDropClasses}
-          onDragEnter={() => setDropTargetId('board-end')}
-          onDragOver={handleDragOver}
-          onDrop={handleBoardDrop}
-        >
-          Drop to send to the end
+      </section>
+
+      <section
+        className={`library-panel ${dropTargetId === 'library' ? 'active-drop' : ''}`}
+        onDragEnter={handlePoolDragEnter}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={handlePoolDrop}
+      >
+        <div className="library-header">
+          <div>
+            <p className="eyebrow">Firm Library</p>
+            <h2>All Firms</h2>
+            <p className="library-copy">Drag cards into the tiers above or drop them here to release.</p>
+          </div>
+          <span className="library-count">{availableCards.length} / {companyCards.length}</span>
         </div>
-      </div>
+        <div className="library-grid">
+          {availableCards.length > 0 ? (
+            availableCards.map((card) => renderCard(card, { variant: 'compact-card' }))
+          ) : (
+            <div className="empty-state">
+              No cards match the filters. Adjust the filters or release cards from a tier.
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="about-panel">
+        <h3>About This Board</h3>
+        <p>
+          The data blends NYC firms, stage focus, check sizes, and sectors so classroom discussions convert into a tier
+          list. After edits run npm run deploy to sync with GitHub Pages.
+        </p>
+        <p>
+          Workshop prompt: pick a capital type, drag signature firms into each phase, then open cards to narrate voice
+          lines, check ranges, and extra notes.
+        </p>
+      </section>
     </div>
   )
 }
